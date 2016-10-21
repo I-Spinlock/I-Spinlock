@@ -1,0 +1,87 @@
+*** arch/x86/include/asm/spinlock.h	2014-01-20 03:40:07.000000000 +0100
+--- spinlock.h	2016-10-21 10:44:32.248088382 +0200
+***************
+*** 8,14 ****
+  #include <linux/compiler.h>
+  #include <asm/paravirt.h>
+  #include <asm/bitops.h>
+! 
+  /*
+   * Your basic SMP spinlocks, allowing only a single CPU anywhere
+   *
+--- 8,17 ----
+  #include <linux/compiler.h>
+  #include <asm/paravirt.h>
+  #include <asm/bitops.h>
+! #include <asm/xen/hypervisor.h>
+! #include <xen/xen.h>
+! #include <asm/current.h>
+! #include <asm/thread_info.h>
+  /*
+   * Your basic SMP spinlocks, allowing only a single CPU anywhere
+   *
+***************
+*** 80,89 ****
+   * in the high part, because a wide xadd increment of the low part would carry
+   * up and contaminate the high part.
+   */
+  static __always_inline void arch_spin_lock(arch_spinlock_t *lock)
+  {
+  	register struct __raw_tickets inc = { .tail = TICKET_LOCK_INC };
+! 
+  	inc = xadd(&lock->tickets, inc);
+  	if (likely(inc.head == inc.tail))
+  		goto out;
+--- 83,119 ----
+   * in the high part, because a wide xadd increment of the low part would carry
+   * up and contaminate the high part.
+   */
++ 
++ static __always_inline uint64_t rdtsc(void)
++ {
++          unsigned int hi, lo;
++         __asm__ volatile("rdtsc" : "=a" (lo), "=d" (hi));
++         return ((uint64_t)hi << 32) | lo;
++ }
++ static __always_inline uint8_t __dist(__ticket_t head, __ticket_t tail)
++ {
++ 	return (tail -head);
++ }
++ 
++ #define AVERAGE_HOLD_TIME  (1 << 15)
+  static __always_inline void arch_spin_lock(arch_spinlock_t *lock)
+  {
+  	register struct __raw_tickets inc = { .tail = TICKET_LOCK_INC };
+! 	register uint64_t remaining=0,time=0;
+! 	struct shared_info *s = HYPERVISOR_shared_info;
+! 	register uint32_t cpu= tab_cpuid();
+! 	register uint8_t dist = __dist(lock->tickets.head,lock->tickets.tail);
+! 	 time = rdtsc();
+! 	remaining = s->vcpu_info[cpu].time_slice - time;
+! 	if(unlikely(remaining < AVERAGE_HOLD_TIME*(dist+1)))	
+! 	{
+! 		register u8 time_slice = s->vcpu_info[cpu].time_slice_start;
+! 		do
+! 		{
+! 			cpu_relax();
+! 		}while(time_slice==s->vcpu_info[cpu].time_slice_start);
+! 	
+! 	}
+  	inc = xadd(&lock->tickets, inc);
+  	if (likely(inc.head == inc.tail))
+  		goto out;
+*** include/xen/interface/xen.h	2014-01-20 03:40:07.000000000 +0100
+--- xen.h	2016-10-21 10:50:24.016077968 +0200
+***************
+*** 344,349 ****
+--- 344,353 ----
+  	xen_ulong_t evtchn_pending_sel;
+  	struct arch_vcpu_info arch;
+  	struct pvclock_vcpu_time_info time;
++ 	
++         uint64_t time_slice;
++         uint8_t time_slice_start;
++ 
+  }; /* 64 bytes (x86) */
+  
+  /*
