@@ -1,0 +1,118 @@
+*** xen/include/public/xen.h	2014-10-01 09:39:35.655581267 +0200
+--- xen.h	2016-10-21 11:18:12.048028586 +0200
+***************
+*** 159,164 ****
+--- 159,165 ----
+  #define VIRQ_MEM_EVENT  10 /* G. (DOM0) A memory event has occured           */
+  #define VIRQ_XC_RESERVED 11 /* G. Reserved for XenClient                     */
+  #define VIRQ_ENOMEM     12 /* G. (DOM0) Low on heap memory       */
++ #define VIRQ_PERFCTR    13 /* V. Perfctr counter overflow                    */
+  
+  /* Architecture-specific VIRQ definitions. */
+  #define VIRQ_ARCH_0    16
+***************
+*** 588,598 ****
+--- 589,606 ----
+      unsigned long evtchn_pending_sel;
+      struct arch_vcpu_info arch;
+      struct vcpu_time_info time;
++      
++     uint64_t time_slice;
++     uint8_t time_slice_start;
++ /*     uint64_t id_quantum; */
+  }; /* 64 bytes (x86) */
+  #ifndef __XEN__
+  typedef struct vcpu_info vcpu_info_t;
+  #endif
+  
++ 
++ 
++ 
+  /*
+   * Xen/kernel shared data -- pointer provided in start_info.
+   *
+***************
+*** 645,651 ****
+      uint32_t wc_version;      /* Version counter: see vcpu_time_info_t. */
+      uint32_t wc_sec;          /* Secs  00:00:00 UTC, Jan 1, 1970.  */
+      uint32_t wc_nsec;         /* Nsecs 00:00:00 UTC, Jan 1, 1970.  */
+- 
+      struct arch_shared_info arch;
+  
+  };
+--- 653,658 ----
+*** xen/common/sched_credit.c	2014-10-01 09:39:35.635581267 +0200
+--- sched_credit.c	2016-10-21 11:34:19.007999959 +0200
+***************
+*** 23,28 ****
+--- 23,33 ----
+  #include <xen/errno.h>
+  #include <xen/keyhandler.h>
+  
++ 
++ #include <acpi/cpufreq/cpufreq.h>
++ #include <asm/percpu.h>
++ 
++ 
+  /*
+   * CSCHED_STATS
+   *
+***************
+*** 180,185 ****
+--- 185,201 ----
+  static void csched_tick(void *_cpu);
+  static void csched_acct(void *dummy);
+  
++ tatic const unsigned int maxfreq=220600;
++ static inline int csched_get_current_freq(unsigned int cpuid)
++ {
++         struct cpufreq_policy *policy;
++         policy = per_cpu(cpufreq_cpu_policy,cpuid);
++         if(!policy)
++                 return maxfreq;
++         return policy->cur;
++ 
++ }
++ 
+  static inline int
+  __vcpu_on_runq(struct csched_vcpu *svc)
+  {
+***************
+*** 1331,1337 ****
+      struct csched_vcpu *snext;
+      struct task_slice ret;
+      s_time_t runtime, tslice;
+! 
+      CSCHED_STAT_CRANK(schedule);
+      CSCHED_VCPU_CHECK(current);
+  
+--- 1347,1353 ----
+      struct csched_vcpu *snext;
+      struct task_slice ret;
+      s_time_t runtime, tslice;
+!     long  temp_value;
+      CSCHED_STAT_CRANK(schedule);
+      CSCHED_VCPU_CHECK(current);
+  
+***************
+*** 1438,1444 ****
+      /*
+       * Return task to run next...
+       */
+!     ret.time = (is_idle_vcpu(snext->vcpu) ?
+                  -1 : tslice);
+      ret.task = snext->vcpu;
+  
+--- 1454,1465 ----
+      /*
+       * Return task to run next...
+       */
+!  if(snext->vcpu->domain->domain_id > 0 &&  snext->vcpu->domain->domain_id < 3242)
+!   {
+!     rdtscll(temp_value);
+! 	shared_info(snext->vcpu->domain,vcpu_info[snext->vcpu->vcpu_id].time_slice) = temp_value + tslice*csched_get_current_freq(cpu); 
+!  }   
+!  ret.time = (is_idle_vcpu(snext->vcpu) ?
+                  -1 : tslice);
+      ret.task = snext->vcpu;
+  
